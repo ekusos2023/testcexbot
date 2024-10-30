@@ -1,0 +1,89 @@
+//@version=5
+strategy("Cexbot Strategy Enhanced", overlay=true, commission_value=XX, initial_capital=10000)
+
+// Strategy Parameters
+var string G_BASIC = "Basic Settings"
+var string G_MA = "Moving Average Settings"
+var string G_RISK = "Risk Management"
+var string G_TIME = "Time Filter"
+
+// Basic Settings
+lookback_period = input.int(120, minval=1, maxval=500, title="Lookback Period", step=1, group=G_BASIC)
+long_drop_percentage = input.float(10.0, minval=0.1, maxval=50.0, title="Long Drop Percentage", step=1.0, group=G_BASIC)
+profit_take_percentage = input.float(10.0, minval=0.1, maxval=50.0, title="Profit Take Percentage", step=1.0, group=G_BASIC)
+
+// Moving Average Settings
+long_ma_length = input.int(200, minval=1, maxval=200, title="Long MA Length", step=1, group=G_MA)
+short_ma_length = input.int(25, minval=1, maxval=100, title="Short MA Length", step=1, group=G_MA)
+use_sma_filter = input.bool(true, title="Use SMA Filter", group=G_MA)
+ma_type = input.string("SMA", "MA Type", options=["SMA", "EMA", "WMA"], group=G_MA)
+
+// Risk Management
+use_stop_loss = input.bool(true, "Use Stop Loss", group=G_RISK)
+stop_loss_percentage = input.float(5.0, minval=0.1, maxval=20.0, title="Stop Loss %", step=0.1, group=G_RISK)
+max_position_size = input.float(100.0, minval=1.0, maxval=100.0, title="Max Position Size %", step=1.0, group=G_RISK)
+
+// Time Filter
+start_year = input.int(2020, minval=2000, maxval=2050, title="Start Year", group=G_TIME)
+start_month = input.int(1, minval=1, maxval=12, title="Start Month", group=G_TIME)
+start_day = input.int(1, minval=1, maxval=31, title="Start Day", group=G_TIME)
+
+// Calculate price levels
+highestHigh = ta.highest(high, lookback_period)
+lowestLow = ta.lowest(low, lookback_period)
+long_entry_price = highestHigh * (1 - long_drop_percentage / 100)
+profit_target_price = lowestLow * (1 + profit_take_percentage / 100)
+
+// Moving Average calculations
+f_get_ma(type, src, len) =>
+    switch type
+        "SMA" => ta.sma(src, len)
+        "EMA" => ta.ema(src, len)
+        "WMA" => ta.wma(src, len)
+
+long_ma = f_get_ma(ma_type, close, long_ma_length)
+short_ma = f_get_ma(ma_type, close, short_ma_length)
+
+// Calculate position size based on risk
+f_calculate_position_size() =>
+    account_size = strategy.equity
+    risk_amount = account_size * (max_position_size / 100)
+    position_size = math.min(risk_amount / close, strategy.equity / close)
+    position_size
+
+// Trading conditions
+time_condition = time >= timestamp(start_year, start_month, start_day)
+price_condition = long_entry_price < profit_target_price
+ma_condition = use_sma_filter ? short_ma > long_ma : true
+entry_condition = close < long_entry_price and ma_condition
+exit_condition = close > profit_target_price
+
+// Trading logic
+if time_condition and price_condition
+    if entry_condition
+        strategy.entry("Long", strategy.long, qty=f_calculate_position_size())
+    
+    if exit_condition
+        strategy.close("Long")
+    
+    // Stop loss
+    if use_stop_loss and strategy.position_size > 0
+        stop_price = strategy.position_avg_price * (1 - stop_loss_percentage / 100)
+        strategy.exit("SL", "Long", stop=stop_price)
+
+// Plotting
+var color ENTRY_COLOR = color.new(color.red, 0)
+var color TARGET_COLOR = color.new(color.green, 0)
+var color LONG_MA_COLOR = color.new(color.blue, 0)
+var color SHORT_MA_COLOR = color.new(color.orange, 0)
+
+plot(long_entry_price, color=ENTRY_COLOR, linewidth=2, title="Long Entry Price")
+plot(profit_target_price, color=TARGET_COLOR, linewidth=2, title="Profit Target Price")
+plot(long_ma, color=LONG_MA_COLOR, linewidth=2, title="Long MA")
+plot(short_ma, color=SHORT_MA_COLOR, linewidth=2, title="Short MA")
+
+// Add labels for current signals
+if entry_condition
+    label.new(bar_index, low, text="Buy Signal", color=color.green, style=label.style_label_up)
+if exit_condition
+    label.new(bar_index, high, text="Sell Signal", color=color.red, style=label.style_label_down)
