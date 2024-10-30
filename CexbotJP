@@ -1,0 +1,130 @@
+//@version=5
+// overlay=true: チャートに重ねて表示
+// commission_value: 取引手数料（XX%）
+strategy("Cexbot Strategy", overlay=true, commission_value=XX, initial_capital=10000)
+
+// パラメータグループの定義
+
+var string G_BASIC = "基本設定"
+var string G_MA = "移動平均線設定"
+var string G_RISK = "リスク管理設定"
+var string G_TIME = "時間フィルター設定"
+
+// 基本設定パラメータ
+
+// lookback_period: 過去の高値・安値を計算する期間
+// long_drop_percentage: エントリー価格を計算する際の高値からの下落率
+// profit_take_percentage: 利確価格を計算する際の安値からの上昇率
+
+lookback_period = input.int(120, minval=1, maxval=500, title="過去の参照期間", step=1, group=G_BASIC)
+long_drop_percentage = input.float(10.0, minval=0.1, maxval=50.0, title="エントリー価格計算用の下落率(%)", step=1.0, group=G_BASIC)
+profit_take_percentage = input.float(10.0, minval=0.1, maxval=50.0, title="利確価格計算用の上昇率(%)", step=1.0, group=G_BASIC)
+
+// 移動平均線設定
+
+// long_ma_length: 長期移動平均線の期間
+// short_ma_length: 短期移動平均線の期間
+// use_sma_filter: 移動平均線フィルターを使用するかどうか
+// ma_type: 移動平均線の種類（SMA: 単純移動平均, EMA: 指数移動平均, WMA: 加重移動平均）
+
+long_ma_length = input.int(200, minval=1, maxval=200, title="長期移動平均線期間", step=1, group=G_MA)
+short_ma_length = input.int(25, minval=1, maxval=100, title="短期移動平均線期間", step=1, group=G_MA)
+use_sma_filter = input.bool(true, title="移動平均線フィルターを使用", group=G_MA)
+ma_type = input.string("SMA", "移動平均線の種類", options=["SMA", "EMA", "WMA"], group=G_MA)
+
+// リスク管理設定
+
+// use_stop_loss: ストップロスを使用するかどうか
+// stop_loss_percentage: ストップロスの割合
+// max_position_size: 最大ポジションサイズ（口座残高に対する割合）
+
+use_stop_loss = input.bool(true, "ストップロス使用", group=G_RISK)
+stop_loss_percentage = input.float(5.0, minval=0.1, maxval=20.0, title="ストップロス率(%)", step=0.1, group=G_RISK)
+max_position_size = input.float(100.0, minval=1.0, maxval=100.0, title="最大ポジションサイズ(%)", step=1.0, group=G_RISK)
+
+// 時間フィルター設定
+// バックテスト開始日の設定
+
+start_year = input.int(2020, minval=2000, maxval=2050, title="開始年", group=G_TIME)
+start_month = input.int(1, minval=1, maxval=12, title="開始月", group=G_TIME)
+start_day = input.int(1, minval=1, maxval=31, title="開始日", group=G_TIME)
+
+// 価格レベルの計算
+// 指定期間の最高値と最安値を計算
+
+highestHigh = ta.highest(high, lookback_period)
+lowestLow = ta.lowest(low, lookback_period)
+
+// エントリー価格と利確価格の計算
+// エントリー価格 = 最高値 × (1 - 下落率)
+// 利確価格 = 最安値 × (1 + 上昇率)
+
+long_entry_price = highestHigh * (1 - long_drop_percentage / 100)
+profit_target_price = lowestLow * (1 + profit_take_percentage / 100)
+
+// 移動平均線の計算
+// 選択された移動平均線タイプに基づいて計算を行う関数
+
+f_get_ma(type, src, len) =>
+    switch type
+        "SMA" => ta.sma(src, len)  // 単純移動平均
+        "EMA" => ta.ema(src, len)  // 指数移動平均
+        "WMA" => ta.wma(src, len)  // 加重移動平均
+
+// 長期と短期の移動平均線を計算
+long_ma = f_get_ma(ma_type, close, long_ma_length)
+short_ma = f_get_ma(ma_type, close, short_ma_length)
+
+// ポジションサイズの計算
+// 口座残高に基づいて適切なポジションサイズを計算する関数
+
+f_calculate_position_size() =>
+    account_size = strategy.equity  // 現在の口座残高
+    risk_amount = account_size * (max_position_size / 100)  // リスク許容額
+    position_size = math.min(risk_amount / close, strategy.equity / close)  // ポジションサイズの計算
+    position_size
+
+// トレード条件の設定
+// 各種条件をチェック
+
+time_condition = time >= timestamp(start_year, start_month, start_day)  // 時間フィルター
+price_condition = long_entry_price < profit_target_price  // 価格条件
+ma_condition = use_sma_filter ? short_ma > long_ma : true  // 移動平均線条件
+entry_condition = close < long_entry_price and ma_condition  // エントリー条件
+exit_condition = close > profit_target_price  // 利確条件
+
+// トレードロジックの実装
+
+if time_condition and price_condition
+    // エントリー条件を満たした場合
+    if entry_condition
+        strategy.entry("Long", strategy.long, qty=f_calculate_position_size())
+    
+    // 利確条件を満たした場合
+    if exit_condition
+        strategy.close("Long")
+    
+    // ストップロス条件
+    if use_stop_loss and strategy.position_size > 0
+        stop_price = strategy.position_avg_price * (1 - stop_loss_percentage / 100)
+        strategy.exit("SL", "Long", stop=stop_price)
+
+// チャートへの描画設定
+// 色の定義
+
+var color ENTRY_COLOR = color.new(color.red, 0)      // エントリーライン
+var color TARGET_COLOR = color.new(color.green, 0)   // 利確ライン
+var color LONG_MA_COLOR = color.new(color.blue, 0)   // 長期移動平均線
+var color SHORT_MA_COLOR = color.new(color.orange, 0) // 短期移動平均線
+
+// 各ラインの描画
+plot(long_entry_price, color=ENTRY_COLOR, linewidth=2, title="エントリー価格")
+plot(profit_target_price, color=TARGET_COLOR, linewidth=2, title="利確価格")
+plot(long_ma, color=LONG_MA_COLOR, linewidth=2, title="長期移動平均線")
+plot(short_ma, color=SHORT_MA_COLOR, linewidth=2, title="短期移動平均線")
+
+// シグナルラベルの表示
+if entry_condition
+    label.new(bar_index, low, text="買いシグナル", color=color.green, style=label.style_label_up)
+if exit_condition
+    label.new(bar_index, high, text="売りシグナル", color=color.red, style=label.style_label_down)
